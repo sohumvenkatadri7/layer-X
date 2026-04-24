@@ -1,6 +1,4 @@
-import { Link } from "@tanstack/react-router";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { ContactsManager } from "./ContactsManager";
 
 const TOKENS = [
   { symbol: "SOL", value: "₹98,420.10" },
@@ -8,9 +6,19 @@ const TOKENS = [
   { symbol: "JUP", value: "₹4,400.00" },
 ];
 
+const PORTFOLIO_TOKENS = [
+  { symbol: "SOL", value: 8123.21, change: 2.34 },
+  { symbol: "USDC", value: 1000.0, change: 0.0 },
+  { symbol: "ETH", value: 245000.55, change: -1.12 },
+  { symbol: "BTC", value: 5820000.0, change: 0.85 },
+  { symbol: "PENGU", value: 4200.0, change: 12.5 },
+  { symbol: "JUP", value: 980.0, change: -3.4 },
+];
+
 export function ContextPanel() {
   const { publicKey } = useWallet();
   const userId = publicKey?.toBase58() ?? null;
+  const portfolioTotal = PORTFOLIO_TOKENS.reduce((sum, token) => sum + token.value, 0);
 
   return (
     <aside className="hidden w-[300px] shrink-0 flex-col gap-12 px-8 py-8 lg:flex">
@@ -41,22 +49,43 @@ export function ContextPanel() {
         </ul>
       </section>
 
-      {/* Identity */}
+      {/* Portfolio */}
       <section className="space-y-4">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">Identity</div>
-        <div className="space-y-1 text-sm">
-          <div className="font-medium text-foreground">Wallet public key</div>
-          <div className="font-mono text-xs text-muted-foreground">
-            {userId ? `${userId.slice(0, 4)}...${userId.slice(-4)}` : "Connect wallet to load identity"}
-          </div>
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Portfolio</div>
+        <div className="text-lg font-semibold tracking-tight text-foreground">
+          ₹{portfolioTotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </div>
-        <ContactsManager userId={userId} compact />
-        <Link
-          to="/app/identity"
-          className="inline-block text-xs text-primary transition-colors hover:text-primary-glow"
-        >
-          Open full identity page
-        </Link>
+        <div className="space-y-3">
+          {PORTFOLIO_TOKENS.map((token) => (
+            <div
+              key={token.symbol}
+              className="flex items-center justify-between text-sm transition-colors hover:text-primary"
+            >
+              <div className="font-medium text-foreground">{token.symbol}</div>
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-xs text-muted-foreground">
+                  ₹{token.value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                <span
+                  className={`text-xs font-medium ${
+                    token.change > 0
+                      ? "text-green-400"
+                      : token.change < 0
+                        ? "text-red-400"
+                        : "text-muted-foreground"
+                  }`}
+                >
+                  {token.change > 0 ? "+" : ""}
+                  {token.change}%
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="pt-2 text-xs text-muted-foreground">Updated just now</div>
+        <div className="font-mono text-[11px] text-muted-foreground/80">
+          {userId ? `${userId.slice(0, 4)}...${userId.slice(-4)}` : "Connect wallet to load identity"}
+        </div>
       </section>
     </aside>
   );
