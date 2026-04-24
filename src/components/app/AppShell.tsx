@@ -1,5 +1,5 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, ArrowLeftRight, Compass, User, Settings } from "lucide-react";
+import { LayoutDashboard, ArrowLeftRight, Compass, User, Settings, Gem } from "lucide-react";
 import { ContextPanel } from "./ContextPanel";
 import { WalletConnector } from "./WalletConnector";
 
@@ -7,6 +7,8 @@ const NAV = [
   { to: "/app", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { to: "/app/transactions", label: "Transactions", icon: ArrowLeftRight, exact: false },
   { to: "/app/explorer", label: "Explorer", icon: Compass, exact: false },
+  { to: "/app/assets", label: "Assets", icon: Gem, exact: false },
+  { to: "/app/launch", label: "Launch", icon: Settings, exact: false },
   { to: "/app/identity", label: "Identity", icon: User, exact: false },
   { to: "/app/settings", label: "Settings", icon: Settings, exact: false },
 ] as const;
@@ -22,7 +24,7 @@ export function AppShell({ children }: { children?: React.ReactNode }) {
         <div className="px-6 pt-6 pb-10">
           <Link to="/" className="flex items-center gap-2">
             <span className="inline-block h-2 w-2 rounded-full bg-primary glow-primary-sm" />
-            <span className="font-mono text-sm font-medium tracking-tight">cryptochat</span>
+            <span className="font-mono text-sm font-medium tracking-tight">layer X</span>
           </Link>
         </div>
 

@@ -4,7 +4,7 @@ import { ArrowRight } from "lucide-react";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "CryptoChat — Crypto, but as simple as texting" },
+      { title: "Layer X  — Crypto, but as simple as texting" },
       {
         name: "description",
         content:
@@ -28,7 +28,7 @@ function LandingPage() {
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
         <Link to="/" className="flex items-center gap-2">
           <span className="inline-block h-2 w-2 rounded-full bg-primary glow-primary-sm" />
-          <span className="font-mono text-sm font-medium tracking-tight">cryptochat</span>
+          <span className="font-mono text-sm font-medium tracking-tight">layer X</span>
         </Link>
         <nav className="flex items-center gap-6 text-sm text-muted-foreground">
           <a href="#features" className="transition-colors hover:text-foreground">
@@ -113,7 +113,7 @@ function LandingPage() {
 
       {/* Footer */}
       <footer className="mx-auto max-w-6xl px-6 py-10 text-xs text-muted-foreground/60">
-        © {new Date().getFullYear()} CryptoChat · Built on Solana
+        © {new Date().getFullYear()} layer X · Built on Solana
       </footer>
     </div>
   );

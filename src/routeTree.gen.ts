@@ -14,8 +14,10 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as AppTransactionsRouteImport } from './routes/app.transactions'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
+import { Route as AppLaunchRouteImport } from './routes/app.launch'
 import { Route as AppIdentityRouteImport } from './routes/app.identity'
 import { Route as AppExplorerRouteImport } from './routes/app.explorer'
+import { Route as AppAssetsRouteImport } from './routes/app.assets'
 
 const AppRoute = AppRouteImport.update({
   id: '/app',
@@ -42,6 +44,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRoute,
 } as any)
+const AppLaunchRoute = AppLaunchRouteImport.update({
+  id: '/launch',
+  path: '/launch',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppIdentityRoute = AppIdentityRouteImport.update({
   id: '/identity',
   path: '/identity',
@@ -52,20 +59,29 @@ const AppExplorerRoute = AppExplorerRouteImport.update({
   path: '/explorer',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAssetsRoute = AppAssetsRouteImport.update({
+  id: '/assets',
+  path: '/assets',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/app': typeof AppRouteWithChildren
+  '/app/assets': typeof AppAssetsRoute
   '/app/explorer': typeof AppExplorerRoute
   '/app/identity': typeof AppIdentityRoute
+  '/app/launch': typeof AppLaunchRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/transactions': typeof AppTransactionsRoute
   '/app/': typeof AppIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/app/assets': typeof AppAssetsRoute
   '/app/explorer': typeof AppExplorerRoute
   '/app/identity': typeof AppIdentityRoute
+  '/app/launch': typeof AppLaunchRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/transactions': typeof AppTransactionsRoute
   '/app': typeof AppIndexRoute
@@ -74,8 +90,10 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/app': typeof AppRouteWithChildren
+  '/app/assets': typeof AppAssetsRoute
   '/app/explorer': typeof AppExplorerRoute
   '/app/identity': typeof AppIdentityRoute
+  '/app/launch': typeof AppLaunchRoute
   '/app/settings': typeof AppSettingsRoute
   '/app/transactions': typeof AppTransactionsRoute
   '/app/': typeof AppIndexRoute
@@ -85,16 +103,20 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/app'
+    | '/app/assets'
     | '/app/explorer'
     | '/app/identity'
+    | '/app/launch'
     | '/app/settings'
     | '/app/transactions'
     | '/app/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/app/assets'
     | '/app/explorer'
     | '/app/identity'
+    | '/app/launch'
     | '/app/settings'
     | '/app/transactions'
     | '/app'
@@ -102,8 +124,10 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/app'
+    | '/app/assets'
     | '/app/explorer'
     | '/app/identity'
+    | '/app/launch'
     | '/app/settings'
     | '/app/transactions'
     | '/app/'
@@ -151,6 +175,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/launch': {
+      id: '/app/launch'
+      path: '/launch'
+      fullPath: '/app/launch'
+      preLoaderRoute: typeof AppLaunchRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/identity': {
       id: '/app/identity'
       path: '/identity'
@@ -165,20 +196,31 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppExplorerRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/assets': {
+      id: '/app/assets'
+      path: '/assets'
+      fullPath: '/app/assets'
+      preLoaderRoute: typeof AppAssetsRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
+  AppAssetsRoute: typeof AppAssetsRoute
   AppExplorerRoute: typeof AppExplorerRoute
   AppIdentityRoute: typeof AppIdentityRoute
+  AppLaunchRoute: typeof AppLaunchRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppTransactionsRoute: typeof AppTransactionsRoute
   AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAssetsRoute: AppAssetsRoute,
   AppExplorerRoute: AppExplorerRoute,
   AppIdentityRoute: AppIdentityRoute,
+  AppLaunchRoute: AppLaunchRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppTransactionsRoute: AppTransactionsRoute,
   AppIndexRoute: AppIndexRoute,
