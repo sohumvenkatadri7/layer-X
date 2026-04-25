@@ -1,7 +1,8 @@
 import type { Connection } from "@solana/web3.js";
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
-const API_BASE = import.meta.env.VITE_CONTACTS_API_URL ?? "http://localhost:8787";
+const API_BASE =
+  import.meta.env.VITE_CONTACTS_API_URL ?? (import.meta.env.PROD ? "/api" : "http://localhost:8787");
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 

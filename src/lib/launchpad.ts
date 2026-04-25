@@ -1,4 +1,5 @@
-const API_BASE = import.meta.env.VITE_CONTACTS_API_URL ?? "http://localhost:8787";
+const API_BASE =
+  import.meta.env.VITE_CONTACTS_API_URL ?? (import.meta.env.PROD ? "/api" : "http://localhost:8787");
 
 export type LaunchTokenPayload = {
   account: string;

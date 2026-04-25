@@ -518,7 +518,8 @@ async function compareJupiterQuotes(parsed: ParsedDexCommand) {
   }
 
   const amount = Math.round(parsed.amount * 10 ** fromToken.decimals);
-  const apiBase = import.meta.env.VITE_CONTACTS_API_URL || "http://localhost:8787";
+  const apiBase =
+    import.meta.env.VITE_CONTACTS_API_URL || (import.meta.env.PROD ? "/api" : "http://localhost:8787");
   const [aggregatedResponse] = await Promise.all([
     fetch(
       `${apiBase}/jupiter/quote?inputMint=${fromToken.mint}&outputMint=${toToken.mint}&amount=${amount}&slippageBps=50`,

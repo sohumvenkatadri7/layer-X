@@ -211,7 +211,8 @@ export function useSpeechRecognition(
 
     try {
       // 1. Fetch a temporary token from our server
-      const apiUrl = import.meta.env.VITE_CONTACTS_API_URL || "http://localhost:8787";
+      const apiUrl =
+        import.meta.env.VITE_CONTACTS_API_URL || (import.meta.env.PROD ? "/api" : "http://localhost:8787");
       const tokenRes = await fetch(`${apiUrl}/speech-token`);
       if (!tokenRes.ok) {
         throw new Error("Failed to authenticate speech recognition.");
