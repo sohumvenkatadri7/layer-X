@@ -12,6 +12,7 @@ import {
   type Contact,
 } from "@/lib/contacts";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
+import { truncateAddress } from "@/lib/wallet-assets";
 
 type ParsedTx =
   | {
@@ -88,14 +89,6 @@ function randomHash() {
   let s = "";
   for (let i = 0; i < 16; i++) s += chars[Math.floor(Math.random() * chars.length)];
   return `0x${s}`;
-}
-
-function truncateAddress(address: string, chars = 4) {
-  if (address.length <= chars * 2 + 3) {
-    return address;
-  }
-
-  return `${address.slice(0, chars)}...${address.slice(-chars)}`;
 }
 
 function levenshteinDistance(a: string, b: string) {
@@ -205,7 +198,6 @@ function canonicalizeSpeechCommandWithContacts(text: string, contacts: Contact[]
 
   return `${prefix}@${spokenRecipient}`;
 }
-
 export function CommandCenter() {
   const { connection } = useConnection();
   const { publicKey, connected, sendTransaction } = useWallet();

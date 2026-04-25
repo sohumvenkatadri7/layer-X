@@ -3,7 +3,6 @@ import { useWallet } from "@solana/wallet-adapter-react";
 const TOKENS = [
   { symbol: "SOL", value: "₹98,420.10" },
   { symbol: "USDC", value: "₹22,610.40" },
-  { symbol: "JUP", value: "₹4,400.00" },
 ];
 
 const PORTFOLIO_TOKENS = [
@@ -25,7 +24,9 @@ export function ContextPanel() {
       <section>
         <div className="text-xs uppercase tracking-wider text-muted-foreground">Total Balance</div>
         <div className="mt-2 font-mono text-3xl font-medium tracking-tight text-foreground">
-          ₹1,25,430.50
+          
+          16.3894 SOL
+          <div className="mt-2  text-xl text-muted-foreground">₹1,25,430.50</div>
         </div>
         <div className="mt-3">
           <Sparkline />
@@ -35,7 +36,7 @@ export function ContextPanel() {
 
       {/* Tokens */}
       <section>
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">Tokens</div>
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Portfolio</div>
         <ul className="mt-3 space-y-2.5">
           {TOKENS.map((t) => (
             <li key={t.symbol} className="flex items-baseline justify-between font-mono text-sm">
@@ -48,14 +49,14 @@ export function ContextPanel() {
 
       {/* Portfolio */}
       <section className="space-y-4">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">Portfolio</div>
-        <div className="text-lg font-semibold tracking-tight text-foreground">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Tokens</div>
+        {/* <div className="text-lg font-semibold tracking-tight text-foreground">
           ₹
           {portfolioTotal.toLocaleString("en-IN", {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           })}
-        </div>
+        </div> */}
         <div className="space-y-3">
           {PORTFOLIO_TOKENS.map((token) => (
             <div
@@ -87,12 +88,12 @@ export function ContextPanel() {
             </div>
           ))}
         </div>
-        <div className="pt-2 text-xs text-muted-foreground">Updated just now</div>
-        <div className="font-mono text-[11px] text-muted-foreground/80">
+        {/* <div className="pt-2 text-xs text-muted-foreground">Updated just now</div> */}
+        {/* <div className="font-mono text-[11px] text-muted-foreground/80">
           {userId
             ? `${userId.slice(0, 4)}...${userId.slice(-4)}`
             : "Connect wallet to load identity"}
-        </div>
+        </div> */}
       </section>
     </aside>
   );

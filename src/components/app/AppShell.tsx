@@ -1,5 +1,5 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, ArrowLeftRight, Compass, User, Settings, BarChart3 } from "lucide-react";
+import { LayoutDashboard, ArrowLeftRight, Compass, User, Settings, BarChart3, Gem, Rocket } from "lucide-react";
 import { ContextPanel } from "./ContextPanel";
 import { WalletConnector } from "./WalletConnector";
 
@@ -8,6 +8,8 @@ const NAV = [
   { to: "/app/transactions", label: "Transactions", icon: ArrowLeftRight, exact: false },
   { to: "/app/explorer", label: "Explorer", icon: Compass, exact: false },
   { to: "/app/dex-aggregator", label: "DEX Aggregator", icon: BarChart3, exact: false },
+  { to: "/app/assets", label: "Assets", icon: Gem, exact: false },
+  { to: "/app/launch", label: "Launch Token", icon: Rocket, exact: false },
   { to: "/app/identity", label: "Identity", icon: User, exact: false },
   { to: "/app/settings", label: "Settings", icon: Settings, exact: false },
 ] as const;
@@ -16,6 +18,7 @@ export function AppShell({ children }: { children?: React.ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isExplorerRoute = pathname.startsWith("/app/explorer");
   const isDexAggregatorRoute = pathname.startsWith("/app/dex-aggregator");
+  const isLaunchRoute = pathname.startsWith("/app/launch");
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
@@ -69,7 +72,7 @@ export function AppShell({ children }: { children?: React.ReactNode }) {
       <main className="flex-1 min-w-0 animate-enter">{children ?? <Outlet />}</main>
 
       {/* Right context panel */}
-      {!isExplorerRoute && !isDexAggregatorRoute ? <ContextPanel /> : null}
+      {!(isExplorerRoute || isDexAggregatorRoute || isLaunchRoute) ? <ContextPanel /> : null}
     </div>
   );
 }
