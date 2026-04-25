@@ -39,6 +39,8 @@ const MPL_TOKEN_METADATA_PROGRAM_ID = new PublicKey(
   "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
 );
 
+let usdInrCache: { rate: number; fetchedAt: number } | null = null;
+
 function jsonHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
@@ -154,6 +156,31 @@ async function uploadTokenMetadata({
   return `https://gateway.pinata.cloud/ipfs/${pinataData.IpfsHash}`;
 }
 
+async function getUsdInrRate() {
+  const cacheTtlMs = 10 * 60 * 1000;
+  if (usdInrCache && Date.now() - usdInrCache.fetchedAt < cacheTtlMs) {
+    return usdInrCache.rate;
+  }
+
+  const response = await fetch("https://open.er-api.com/v6/latest/USD");
+  if (!response.ok) {
+    throw new Error("Unable to fetch USD/INR rate.");
+  }
+
+  const data = (await response.json()) as { rates?: { INR?: number } };
+  const rate = data.rates?.INR;
+  if (!rate || !Number.isFinite(rate)) {
+    throw new Error("USD/INR rate unavailable.");
+  }
+
+  usdInrCache = {
+    rate,
+    fetchedAt: Date.now(),
+  };
+
+  return rate;
+}
+
 function toApiContact(doc: ContactDoc): ApiContact {
   return {
     id: doc._id.toHexString(),
@@ -216,6 +243,15 @@ async function main() {
 
       if (url.pathname === "/health") {
         return sendJson(res, 200, { ok: true, mongoConfigured: isMongoConfigured() });
+      }
+
+      if (url.pathname === "/fx/usd-inr") {
+        const rate = await getUsdInrRate();
+        return sendJson(res, 200, {
+          rate,
+          source: "open.er-api.com",
+          updatedAt: new Date().toISOString(),
+        });
       }
 
       if (url.pathname === "/launch-token" && req.method === "POST") {

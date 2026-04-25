@@ -1,22 +1,112 @@
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { useEffect, useState } from "react";
+import { loadWalletPortfolio, type WalletPortfolio } from "@/lib/wallet-assets";
 
-const TOKENS = [
-  { symbol: "SOL", value: "₹98,420.10" },
-  { symbol: "USDC", value: "₹22,610.40" },
-];
+type WatchlistItem = {
+  symbol: string;
+  valueInInr: number | null;
+};
 
-const PORTFOLIO_TOKENS = [
-  { symbol: "SOL", value: 8123.21, change: 2.34 },
-  { symbol: "ETH", value: 245000.55, change: -1.12 },
-  { symbol: "BTC", value: 5820000.0, change: 0.85 },
-  { symbol: "PENGU", value: 4200.0, change: 12.5 },
-  { symbol: "JUP", value: 980.0, change: -3.4 },
-];
+const WATCHLIST = [
+  { symbol: "SOL", id: "solana" },
+  { symbol: "JUP", id: "jupiter-exchange-solana" },
+  { symbol: "ETH", id: "ethereum" },
+  { symbol: "BTC", id: "bitcoin" },
+] as const;
 
 export function ContextPanel() {
+  const { connection } = useConnection();
   const { publicKey } = useWallet();
-  const userId = publicKey?.toBase58() ?? null;
-  const portfolioTotal = PORTFOLIO_TOKENS.reduce((sum, token) => sum + token.value, 0);
+  const [portfolio, setPortfolio] = useState<WalletPortfolio | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWatchlist() {
+      setWatchlistLoading(true);
+
+      try {
+        const response = await fetch(
+          `https://api.coingecko.com/api/v3/simple/price?ids=${WATCHLIST.map((item) => item.id).join(",")}&vs_currencies=inr`,
+        );
+
+        if (!response.ok) {
+          throw new Error("Unable to load watchlist prices.");
+        }
+
+        const data = (await response.json()) as Record<string, { inr?: number }>;
+        if (!cancelled) {
+          setWatchlist(
+            WATCHLIST.map((item) => ({
+              symbol: item.symbol,
+              valueInInr: data[item.id]?.inr ?? null,
+            })),
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setWatchlist([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setWatchlistLoading(false);
+        }
+      }
+    }
+
+    void loadWatchlist();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!publicKey) {
+      setPortfolio(null);
+      setLoading(false);
+      return;
+    }
+
+    const owner = publicKey;
+
+    let cancelled = false;
+
+    async function loadPortfolio() {
+      setLoading(true);
+
+      try {
+        const nextPortfolio = await loadWalletPortfolio(connection, owner);
+        if (!cancelled) {
+          setPortfolio(nextPortfolio);
+        }
+      } catch {
+        if (!cancelled) {
+          setPortfolio(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadPortfolio();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, publicKey]);
+
+  const formattedBalance = portfolio?.solBalance.toLocaleString("en-US", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  });
+
+  const formattedPortfolioValue = formatInr(portfolio?.totalValueInInr ?? null);
 
   return (
     <aside className="hidden w-[300px] shrink-0 flex-col gap-12 px-8 py-8 lg:flex">
@@ -24,76 +114,84 @@ export function ContextPanel() {
       <section>
         <div className="text-xs uppercase tracking-wider text-muted-foreground">Total Balance</div>
         <div className="mt-2 font-mono text-3xl font-medium tracking-tight text-foreground">
-          
-          16.3894 SOL
-          <div className="mt-2  text-xl text-muted-foreground">₹1,25,430.50</div>
+          {publicKey ? (loading ? "Loading..." : `${formattedBalance ?? "0.0000"} SOL`) : "Connect wallet"}
+          <div className="mt-2 text-xl text-muted-foreground">{formattedPortfolioValue}</div>
         </div>
         <div className="mt-3">
           <Sparkline />
         </div>
-        <div className="mt-2 text-xs text-primary">+ 2.4% today</div>
-      </section>
-
-      {/* Tokens */}
-      <section>
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">Portfolio</div>
-        <ul className="mt-3 space-y-2.5">
-          {TOKENS.map((t) => (
-            <li key={t.symbol} className="flex items-baseline justify-between font-mono text-sm">
-              <span className="text-foreground">{t.symbol}</span>
-              <span className="text-muted-foreground">{t.value}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-2 text-xs text-primary">Live wallet valuation</div>
       </section>
 
       {/* Portfolio */}
-      <section className="space-y-4">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">Tokens</div>
-        {/* <div className="text-lg font-semibold tracking-tight text-foreground">
-          ₹
-          {portfolioTotal.toLocaleString("en-IN", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}
-        </div> */}
-        <div className="space-y-3">
-          {PORTFOLIO_TOKENS.map((token) => (
-            <div
-              key={token.symbol}
-              className="flex items-center justify-between text-sm transition-colors hover:text-primary"
-            >
-              <div className="font-medium text-foreground">{token.symbol}</div>
-              <div className="flex items-center gap-3">
-                <span className="font-mono text-xs text-muted-foreground">
-                  ₹
-                  {token.value.toLocaleString("en-IN", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
-                <span
-                  className={`text-xs font-medium ${
-                    token.change > 0
-                      ? "text-green-400"
-                      : token.change < 0
-                        ? "text-red-400"
-                        : "text-muted-foreground"
-                  }`}
-                >
-                  {token.change > 0 ? "+" : ""}
-                  {token.change}%
-                </span>
-              </div>
+      <section>
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Portfolio</div>
+        <div className="mt-3 space-y-3">
+          {loading ? (
+            <div className="space-y-2">
+              <div className="h-10 animate-pulse rounded-lg bg-surface/70" />
+              <div className="h-10 animate-pulse rounded-lg bg-surface/70" />
+              <div className="h-10 animate-pulse rounded-lg bg-surface/70" />
             </div>
-          ))}
+          ) : portfolio?.holdings.length ? (
+            portfolio.holdings.map((token) => (
+              <div
+                key={`${token.mint}-${token.tokenAccount}`}
+                className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-surface/30 px-3 py-2 transition-colors hover:bg-surface/60"
+              >
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-sm font-medium text-foreground">
+                    {token.symbol}
+                  </div>
+                  <div className="truncate font-mono text-[11px] text-muted-foreground">
+                    {token.uiAmountString}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono text-sm text-foreground">{token.valueLabel}</div>
+                  <div className="font-mono text-[11px] text-muted-foreground">
+                    {token.symbol === "SOL" ? "native balance" : "live quote"}
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-lg border border-border/60 bg-surface/30 px-3 py-4 text-sm text-muted-foreground">
+              Connect a wallet to load live holdings.
+            </div>
+          )}
         </div>
-        {/* <div className="pt-2 text-xs text-muted-foreground">Updated just now</div> */}
-        {/* <div className="font-mono text-[11px] text-muted-foreground/80">
-          {userId
-            ? `${userId.slice(0, 4)}...${userId.slice(-4)}`
-            : "Connect wallet to load identity"}
-        </div> */}
+      </section>
+
+      <section>
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Live token values</div>
+        <div className="mt-3 space-y-2.5">
+          {watchlistLoading ? (
+            <>
+              <div className="h-10 animate-pulse rounded-lg bg-surface/70" />
+              <div className="h-10 animate-pulse rounded-lg bg-surface/70" />
+              <div className="h-10 animate-pulse rounded-lg bg-surface/70" />
+              <div className="h-10 animate-pulse rounded-lg bg-surface/70" />
+            </>
+          ) : watchlist.length ? (
+            watchlist.map((token) => (
+              <div
+                key={token.symbol}
+                className="flex items-center justify-between rounded-lg border border-border/60 bg-surface/30 px-3 py-2"
+              >
+                <div>
+                  <div className="font-mono text-sm font-medium text-foreground">{token.symbol}</div>
+                  <div className="font-mono text-[11px] text-muted-foreground">current market value</div>
+                </div>
+                <div className="font-mono text-sm text-foreground">{formatInr(token.valueInInr)}</div>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-lg border border-border/60 bg-surface/30 px-3 py-3 text-sm text-muted-foreground">
+              Market prices unavailable right now.
+            </div>
+          )}
+        </div>
       </section>
     </aside>
   );
@@ -127,4 +225,15 @@ function Sparkline() {
       />
     </svg>
   );
+}
+
+function formatInr(value: number | null) {
+  if (value == null || !Number.isFinite(value)) {
+    return "₹—";
+  }
+
+  return `₹${value.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }

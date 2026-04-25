@@ -1,6 +1,10 @@
 import type { Connection } from "@solana/web3.js";
 import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
+const API_BASE = import.meta.env.VITE_CONTACTS_API_URL ?? "http://localhost:8787";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
 export type OwnedNft = {
   mint: string;
   tokenAccount: string;
@@ -12,10 +16,25 @@ export type OwnedNft = {
 export type OwnedToken = {
   mint: string;
   tokenAccount: string;
+  symbol: string;
   amount: number;
   rawAmount: string;
   decimals: number;
   uiAmountString: string;
+};
+
+export type PortfolioAsset = OwnedToken & {
+  valueInInr: number | null;
+  valueLabel: string;
+};
+
+export type WalletPortfolio = {
+  solBalance: number;
+  solValueInInr: number | null;
+  totalValueInInr: number | null;
+  holdings: PortfolioAsset[];
+  nfts: OwnedNft[];
+  usdInr: number | null;
 };
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -53,6 +72,7 @@ export async function loadWalletAssets(connection: Connection, owner: PublicKey)
       return {
         mint: info.mint,
         tokenAccount: pubkey.toBase58(),
+        symbol: symbolForMint(info.mint),
         rawAmount: tokenAmount.amount,
         decimals: tokenAmount.decimals,
         amount: tokenAmount.uiAmount ?? 0,
@@ -77,9 +97,57 @@ export async function loadWalletAssets(connection: Connection, owner: PublicKey)
   );
 
   return {
+    solLamports: lamports,
     solBalance: lamports / LAMPORTS_PER_SOL,
     tokens: tokens.sort((a, b) => b.amount - a.amount),
     nfts,
+  };
+}
+
+export async function loadWalletPortfolio(connection: Connection, owner: PublicKey): Promise<WalletPortfolio> {
+  const [assets, usdInr] = await Promise.all([loadWalletAssets(connection, owner), loadUsdInrRate()]);
+
+  const holdings = [
+    {
+      mint: SOL_MINT,
+      tokenAccount: owner.toBase58(),
+      symbol: "SOL",
+      amount: assets.solBalance,
+      rawAmount: String(assets.solLamports),
+      decimals: 9,
+      uiAmountString: formatTokenAmount(String(assets.solLamports), 9),
+      valueInInr: null,
+      valueLabel: "—",
+    },
+    ...assets.tokens.map((token) => ({
+      ...token,
+      valueInInr: null,
+      valueLabel: "—",
+    })),
+  ] satisfies Array<PortfolioAsset>;
+
+  const valuedHoldings = await Promise.all(
+    holdings.map(async (holding) => {
+      const valueInInr = await fetchHoldingValueInInr(holding, usdInr);
+      return {
+        ...holding,
+        valueInInr,
+        valueLabel: formatInr(valueInInr),
+      } satisfies PortfolioAsset;
+    }),
+  );
+
+  const liveHoldings = valuedHoldings.filter((holding) => holding.amount > 0);
+  const totalValueInInr = liveHoldings.reduce((sum, holding) => sum + (holding.valueInInr ?? 0), 0);
+  const solValueInInr = liveHoldings.find((holding) => holding.symbol === "SOL")?.valueInInr ?? null;
+
+  return {
+    solBalance: assets.solBalance,
+    solValueInInr,
+    totalValueInInr,
+    holdings: liveHoldings.sort((a, b) => (b.valueInInr ?? 0) - (a.valueInInr ?? 0)),
+    nfts: assets.nfts,
+    usdInr,
   };
 }
 
@@ -167,6 +235,81 @@ function normalizeNftImageUrl(image: string | undefined, baseUri: string) {
   }
 
   return undefined;
+}
+
+async function loadUsdInrRate() {
+  try {
+    const response = await fetch(`${API_BASE}/fx/usd-inr`);
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as { rate?: number };
+    return typeof data.rate === "number" && Number.isFinite(data.rate) ? data.rate : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchHoldingValueInInr(holding: OwnedToken, usdInr: number | null) {
+  if (holding.amount <= 0) {
+    return null;
+  }
+
+  if (holding.mint === SOL_MINT) {
+    const usdcValue = await quoteTokenToUsdc(holding.rawAmount, holding.mint);
+    return usdcValue != null && usdInr != null ? usdcValue * usdInr : null;
+  }
+
+  if (holding.mint === USDC_MINT) {
+    return usdInr != null ? holding.amount * usdInr : null;
+  }
+
+  const usdcValue = await quoteTokenToUsdc(holding.rawAmount, holding.mint);
+  return usdcValue != null && usdInr != null ? usdcValue * usdInr : null;
+}
+
+async function quoteTokenToUsdc(rawAmount: string, inputMint: string) {
+  if (inputMint === USDC_MINT) {
+    return Number(rawAmount) / 1_000_000;
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/jupiter/quote?inputMint=${inputMint}&outputMint=${USDC_MINT}&amount=${rawAmount}&slippageBps=50`,
+    );
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as { outAmount?: string };
+    if (!data.outAmount) {
+      return null;
+    }
+
+    return Number(data.outAmount) / 1_000_000;
+  } catch {
+    return null;
+  }
+}
+
+function symbolForMint(mint: string) {
+  if (mint === SOL_MINT) return "SOL";
+  if (mint === USDC_MINT) return "USDC";
+  if (mint === "Es9vMFrzaCERmJfrF4H2w6RgjR1fQwS2b8s9s7w1qS2") return "USDT";
+  if (mint === "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN") return "JUP";
+  return truncateAddress(mint, 4).toUpperCase();
+}
+
+function formatInr(value: number | null) {
+  if (value == null || !Number.isFinite(value)) {
+    return "—";
+  }
+
+  return `₹${value.toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function formatTokenAmount(rawAmount: string, decimals: number) {
