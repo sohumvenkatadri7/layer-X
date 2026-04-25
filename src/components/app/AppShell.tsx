@@ -16,6 +16,7 @@ const NAV = [
 export function AppShell({ children }: { children?: React.ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isExplorerRoute = pathname.startsWith("/app/explorer");
+  const isLaunchRoute = pathname.startsWith("/app/launch");
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
@@ -69,7 +70,9 @@ export function AppShell({ children }: { children?: React.ReactNode }) {
       <main className="flex-1 min-w-0 animate-enter">{children ?? <Outlet />}</main>
 
       {/* Right context panel */}
-      {!isExplorerRoute ? <ContextPanel /> : null}
+      {/* {!isExplorerRoute ? <ContextPanel /> : null} */}
+      {!(isExplorerRoute || isLaunchRoute) ? <ContextPanel /> : null}
+      {/* {!isLaunchRoute ? <ContextPanel /> : null} */}
     </div>
   );
 }

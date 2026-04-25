@@ -1,664 +1,570 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, LAMPORTS_PER_SOL, Connection, clusterApiUrl } from "@solana/web3.js";
-import { Search, ExternalLink } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { createContact, listContacts, type Contact } from "@/lib/contacts";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { Transaction } from "@solana/web3.js";
+import { AlertTriangle, ExternalLink, Rocket, ShieldAlert, Sparkles } from "lucide-react";
+import { useMemo, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
+import { toast } from "sonner";
+import { createLaunchTransaction } from "@/lib/launchpad";
+import { truncateAddress } from "@/lib/wallet-assets";
 
-type QueryType = "tx" | "wallet";
-type ExplorerNetwork = "devnet" | "mainnet-beta";
-
-type ExplorerResult =
-  | {
-      kind: "tx";
-      summary: TxSummary;
-    }
-  | {
-      kind: "wallet";
-      address: string;
-      balanceSol: number;
-      network: ExplorerNetwork;
-      recent: WalletActivity[];
-    };
-
-type WalletActivity = {
-  signature: string;
-  label: string;
-  timeLabel: string;
-  status: "success" | "pending" | "failed";
+type LaunchDraft = {
+    tokenName: string;
+    tokenSymbol: string;
+    decimals: string;
+    initialSupply: string;
+    tokenDescription: string;
+    tokenLogoURL: string;
 };
 
-type TxSummary = {
-  status: "success" | "pending" | "failed";
-  headline: string;
-  amountLabel: string;
-  valueInrLabel: string;
-  fromLabel: string;
-  toLabel: string;
-  toAddress?: string;
-  feeLabel: string;
-  timeLabel: string;
-  network: string;
-  cluster: ExplorerNetwork;
-  signature: string;
-  flags: string[];
+type LaunchErrors = Partial<Record<keyof LaunchDraft, string>>;
+
+type LaunchResult = {
+    mintAddress: string;
+    metadataUri: string;
+    signature: string;
+    estimatedCostSol: number;
 };
 
-const INR_RATES: Record<string, number> = {
-  SOL: 8090.44,
-  USDC: 94.16,
+const INITIAL_DRAFT: LaunchDraft = {
+    tokenName: "",
+    tokenSymbol: "",
+    decimals: "6",
+    initialSupply: "",
+    tokenDescription: "",
+    tokenLogoURL: "",
 };
 
 export const Route = createFileRoute("/app/launch")({
-  head: () => ({
-    meta: [
-      { title: "Explorer — CryptoChat" },
-      {
-        name: "description",
-        content: "Human-first Solana explorer that translates transactions into clear summaries.",
-      },
-    ],
-  }),
-  component: ExplorerPage,
+    head: () => ({
+        meta: [
+            { title: "Launchpad — CryptoChat" },
+            {
+                name: "description",
+                content: "Launch a minimal Solana token with the smallest set of inputs.",
+            },
+        ],
+    }),
+    component: LaunchpadPage,
 });
 
-function ExplorerPage() {
-  const { publicKey } = useWallet();
-  const userId = publicKey?.toBase58() ?? null;
-  const [selectedNetwork, setSelectedNetwork] = useState<ExplorerNetwork>("devnet");
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ExplorerResult | null>(null);
-  const [contacts, setContacts] = useState<Contact[]>([]);
+function LaunchpadPage() {
+    const { connection } = useConnection();
+    const { publicKey, connected, sendTransaction } = useWallet();
+    const [draft, setDraft] = useState<LaunchDraft>(INITIAL_DRAFT);
+    const [errors, setErrors] = useState<LaunchErrors>({});
+    const [submitError, setSubmitError] = useState<string | null>(null);
+    const [launching, setLaunching] = useState(false);
+    const [result, setResult] = useState<LaunchResult | null>(null);
 
-  const queryType = useMemo(() => detectType(query.trim()), [query]);
-  const rpcConnection = useMemo(
-    () => new Connection(clusterApiUrl(selectedNetwork), "confirmed"),
-    [selectedNetwork],
-  );
+    const preview = useMemo(() => buildPreview(draft), [draft]);
 
-  useEffect(() => {
-    if (!userId) {
-      setContacts([]);
-      return;
+    async function handleSubmit(event: FormEvent) {
+        event.preventDefault();
+
+        if (!connected || !publicKey) {
+            setSubmitError("Connect your wallet before launching a token.");
+            return;
+        }
+
+        const validation = validateDraft(draft);
+        setErrors(validation);
+        setSubmitError(null);
+
+        if (Object.keys(validation).length > 0) {
+            return;
+        }
+
+        setLaunching(true);
+
+        try {
+            const payload = await createLaunchTransaction({
+                account: publicKey.toBase58(),
+                tokenName: draft.tokenName.trim(),
+                tokenSymbol: draft.tokenSymbol.trim().toUpperCase(),
+                decimals: Number(draft.decimals),
+                initialSupply: draft.initialSupply.trim(),
+                tokenDescription: draft.tokenDescription.trim(),
+                tokenLogoURL: draft.tokenLogoURL.trim(),
+            });
+
+      const tx = Transaction.from(base64ToUint8Array(payload.serializedTransaction));
+            const signature = await sendTransaction(tx, connection);
+            await connection.confirmTransaction(signature, "confirmed");
+
+            setResult({
+                mintAddress: payload.mintAddress,
+                metadataUri: payload.metadataUri,
+                signature,
+                estimatedCostSol: payload.estimatedCostSol,
+            });
+            toast.success("Token launched on devnet.");
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : "Token launch failed before confirmation.";
+            setSubmitError(message);
+            toast.error(message);
+        } finally {
+            setLaunching(false);
+        }
     }
 
-    listContacts(userId)
-      .then((response) => setContacts(response.contacts))
-      .catch(() => setContacts([]));
-  }, [userId]);
-
-  async function handleSearch(e?: React.FormEvent) {
-    e?.preventDefault();
-
-    const input = query.trim();
-    if (!input) {
-      return;
+    function update<K extends keyof LaunchDraft>(key: K, value: LaunchDraft[K]) {
+        setDraft((current) => ({ ...current, [key]: value }));
+        setErrors((current) => ({ ...current, [key]: undefined }));
     }
 
-    setLoading(true);
-    setError(null);
-
-    try {
-      const data = await fetchExplorerData(rpcConnection, input, selectedNetwork);
-      setResult(data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not fetch explorer data.";
-      setError(message);
-      setResult(null);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    setResult(null);
-    setError(null);
-  }, [selectedNetwork]);
-
-  return (
-    <div className="min-h-screen px-6 py-8 sm:px-12">
-      <header className="pb-8">
-        <h1 className="text-2xl font-medium tracking-tight sm:text-3xl">Explorer</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Paste a wallet or transaction signature. We translate chain data into plain language.
-        </p>
-      </header>
-
-      <section className="w-full space-y-6">
-        <form
-          onSubmit={(event) => {
-            void handleSearch(event);
-          }}
-          className="rounded-2xl border border-border-subtle bg-gradient-to-r from-surface/90 via-surface/70 to-primary/10 p-5 shadow-sm"
-        >
-          <label
-            htmlFor="explorer-query"
-            className="block text-xs uppercase tracking-wider text-muted-foreground"
-          >
-            Search
-          </label>
-          <div className="mt-3 flex items-center gap-3 rounded-xl border border-border-subtle bg-background/70 px-3">
-            <Search className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <input
-              id="explorer-query"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Enter wallet address or transaction signature..."
-              className="h-12 w-full bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/70"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
-
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-            <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-background/60 px-3 py-1">
-              <span>
-                Detected: {query.trim() ? (queryType === "tx" ? "Transaction" : "Wallet") : "Unknown"}
-              </span>
-              <span>•</span>
-              <span>{selectedNetwork === "devnet" ? "Devnet" : "Mainnet"}</span>
-            </div>
-            <div className="inline-flex h-11 items-center rounded-xl border border-border-subtle bg-background/70 p-1">
-              <button
-                type="button"
-                onClick={() => setSelectedNetwork("devnet")}
-                className={`h-9 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-                  selectedNetwork === "devnet"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Devnet
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedNetwork("mainnet-beta")}
-                className={`h-9 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-                  selectedNetwork === "mainnet-beta"
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Mainnet
-              </button>
-            </div>
-            <button
-              type="submit"
-              disabled={!query.trim() || loading}
-              className="h-11 rounded-xl bg-primary px-5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary-glow disabled:cursor-not-allowed disabled:bg-muted-foreground/30 disabled:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              {loading ? "Searching..." : "Search"}
-            </button>
-          </div>
-        </form>
-
-        {error ? (
-          <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
-            {error}
-          </div>
-        ) : null}
-
-        {result ? (
-          <ExplorerResultView
-            data={result}
-            contacts={contacts}
-            userId={userId}
-            onContactsChanged={setContacts}
-          />
-        ) : null}
-      </section>
-    </div>
-  );
-}
-
-function ExplorerResultView({
-  data,
-  contacts,
-  userId,
-  onContactsChanged,
-}: {
-  data: ExplorerResult;
-  contacts: Contact[];
-  userId: string | null;
-  onContactsChanged: (next: Contact[]) => void;
-}) {
-  if (data.kind === "tx") {
     return (
-      <TxView
-        summary={data.summary}
-        contacts={contacts}
-        userId={userId}
-        onContactSaved={(saved) => onContactsChanged([saved, ...contacts])}
-      />
+        <div className="px-6 py-8 sm:px-12">
+            <header className="pb-10">
+                <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-surface/60 px-3 py-1 text-xs text-muted-foreground">
+                    <Rocket className="h-3.5 w-3.5" aria-hidden="true" />
+                    Devnet launchpad
+                </div>
+                <h1 className="mt-4 text-2xl font-medium tracking-tight sm:text-3xl">Simple Token Launch</h1>
+                <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                    Minimal pump.fun-style flow: name the token, define supply, attach Metaplex metadata,
+                    and sign one devnet transaction.
+                </p>
+            </header>
+
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_420px]">
+                <section className="rounded-[28px] border border-border-subtle bg-gradient-to-br from-surface/95 via-surface/85 to-background p-6 shadow-sm sm:p-8">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                                Launch form
+                            </div>
+                            <h2 className="mt-1 text-xl font-medium text-foreground">Create in under 30 seconds</h2>
+                        </div>
+                        <div className="rounded-full border border-border-subtle bg-background/70 px-3 py-1 text-xs text-muted-foreground">
+                            {connected && publicKey ? truncateAddress(publicKey.toBase58()) : "Wallet disconnected"}
+                        </div>
+                    </div>
+
+                    <form onSubmit={handleSubmit} className="mt-8 space-y-8" aria-busy={launching}>
+                        <fieldset className="grid gap-5 md:grid-cols-2">
+                            <legend className="sr-only">Token basics</legend>
+
+                            <Field
+                                id="tokenName"
+                                label="Token name"
+                                required
+                                hint="Shown in wallets and explorer metadata."
+                                error={errors.tokenName}
+                            >
+                                <input
+                                    id="tokenName"
+                                    type="text"
+                                    value={draft.tokenName}
+                                    onChange={(event) => update("tokenName", event.target.value)}
+                                    placeholder="Prajwal Coin"
+                                    autoComplete="off"
+                                    maxLength={32}
+                                    className={inputClassName(errors.tokenName)}
+                                    aria-invalid={errors.tokenName ? "true" : undefined}
+                                    aria-describedby={errors.tokenName ? "tokenName-error" : "tokenName-hint"}
+                                />
+                            </Field>
+
+                            <Field
+                                id="tokenSymbol"
+                                label="Symbol"
+                                required
+                                hint="Short ticker, ideally 3-6 letters."
+                                error={errors.tokenSymbol}
+                            >
+                                <input
+                                    id="tokenSymbol"
+                                    type="text"
+                                    value={draft.tokenSymbol}
+                                    onChange={(event) => update("tokenSymbol", event.target.value.toUpperCase())}
+                                    placeholder="PRJ"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    maxLength={10}
+                                    className={inputClassName(errors.tokenSymbol)}
+                                    aria-invalid={errors.tokenSymbol ? "true" : undefined}
+                                    aria-describedby={errors.tokenSymbol ? "tokenSymbol-error" : "tokenSymbol-hint"}
+                                />
+                            </Field>
+
+                            <Field
+                                id="decimals"
+                                label="Decimals"
+                                required
+                                hint="Keep it small for simple community tokens."
+                                error={errors.decimals}
+                            >
+                                <select
+                                    id="decimals"
+                                    value={draft.decimals}
+                                    onChange={(event) => update("decimals", event.target.value)}
+                                    className={inputClassName(errors.decimals)}
+                                    aria-invalid={errors.decimals ? "true" : undefined}
+                                    aria-describedby={errors.decimals ? "decimals-error" : "decimals-hint"}
+                                >
+                                    {Array.from({ length: 7 }, (_, index) => (
+                                        <option key={index} value={String(index)}>
+                                            {index}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
+
+                            <Field
+                                id="initialSupply"
+                                label="Initial supply"
+                                required
+                                hint="Whole-number supply before decimals are applied."
+                                error={errors.initialSupply}
+                            >
+                                <input
+                                    id="initialSupply"
+                                    type="text"
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    value={draft.initialSupply}
+                                    onChange={(event) => update("initialSupply", event.target.value.replace(/[^\d]/g, ""))}
+                                    placeholder="1000000"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    className={`${inputClassName(errors.initialSupply)} font-mono tabular-nums`}
+                                    aria-invalid={errors.initialSupply ? "true" : undefined}
+                                    aria-describedby={errors.initialSupply ? "initialSupply-error" : "initialSupply-hint"}
+                                />
+                            </Field>
+                        </fieldset>
+
+                        <fieldset className="grid gap-5">
+                            <legend className="sr-only">Metadata</legend>
+
+                            <Field
+                                id="tokenDescription"
+                                label="Description"
+                                required
+                                hint="One clear sentence is enough."
+                                error={errors.tokenDescription}
+                            >
+                                <textarea
+                                    id="tokenDescription"
+                                    value={draft.tokenDescription}
+                                    onChange={(event) => update("tokenDescription", event.target.value)}
+                                    placeholder="Community token for early testers of CryptoChat."
+                                    rows={4}
+                                    maxLength={280}
+                                    className={`${inputClassName(errors.tokenDescription)} min-h-28 resize-none py-3`}
+                                    aria-invalid={errors.tokenDescription ? "true" : undefined}
+                                    aria-describedby={
+                                        errors.tokenDescription ? "tokenDescription-error" : "tokenDescription-hint"
+                                    }
+                                />
+                            </Field>
+
+                            <Field
+                                id="tokenLogoURL"
+                                label="Logo URL"
+                                hint="Optional direct image URL ending in png, jpg, jpeg, webp, gif, or svg."
+                                error={errors.tokenLogoURL}
+                            >
+                                <input
+                                    id="tokenLogoURL"
+                                    type="url"
+                                    inputMode="url"
+                                    value={draft.tokenLogoURL}
+                                    onChange={(event) => update("tokenLogoURL", event.target.value)}
+                                    placeholder="https://example.com/token.png"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    className={inputClassName(errors.tokenLogoURL)}
+                                    aria-invalid={errors.tokenLogoURL ? "true" : undefined}
+                                    aria-describedby={errors.tokenLogoURL ? "tokenLogoURL-error" : "tokenLogoURL-hint"}
+                                />
+                            </Field>
+                        </fieldset>
+
+                        {submitError ? (
+                            <div className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+                                {submitError}
+                            </div>
+                        ) : null}
+
+                        <div className="flex flex-wrap items-center gap-3">
+                            <button
+                                type="submit"
+                                disabled={launching || !connected}
+                                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-primary px-5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary-glow disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            >
+                                {launching ? "Preparing launch..." : "Launch Token"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setDraft(INITIAL_DRAFT);
+                                    setErrors({});
+                                    setSubmitError(null);
+                                }}
+                                className="inline-flex min-h-11 items-center justify-center rounded-xl border border-border-subtle bg-background/70 px-5 text-sm text-foreground transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            >
+                                Reset
+                            </button>
+                            {/* <div className="text-xs text-muted-foreground">
+                                Requires `PINATA_JWT` and devnet SOL in the connected wallet.
+                            </div> */}
+                        </div>
+                    </form>
+                </section>
+
+                <aside className="space-y-6">
+                    {/* <section className="rounded-[28px] border border-border-subtle bg-gradient-to-b from-background via-surface/60 to-surface/90 p-6 shadow-sm"> */}
+                    <section className="rounded-[28px] border border-border-subtle bg-gradient-to-b from-purple-100/30 via-purple-800/50 to-transparent p-6 shadow-sm">
+                        <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                            Preview
+                        </div>
+                        <div className="mt-5 flex items-center gap-4">
+                            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl border border-border-subtle bg-background">
+                                {draft.tokenLogoURL.trim() ? (
+                                    <img
+                                        src={draft.tokenLogoURL.trim()}
+                                        alt={draft.tokenName.trim() ? `${draft.tokenName.trim()} logo` : "Token logo preview"}
+                                        className="h-full w-full object-cover"
+                                    />
+                                ) : (
+                                    <div className="text-center">
+                                        <div className="text-xs uppercase tracking-wider text-muted-foreground">Logo</div>
+                                        <div className="mt-1 font-mono text-sm text-foreground">
+                                            {(draft.tokenSymbol.trim() || "TKN").slice(0, 4)}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="min-w-0">
+                                <div className="truncate text-lg font-medium text-foreground">
+                                    {draft.tokenName.trim() || "Untitled token"}
+                                </div>
+                                <div className="mt-1 font-mono text-sm uppercase tracking-wide text-muted-foreground">
+                                    {draft.tokenSymbol.trim() || "TKN"}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                            <PreviewStat label="Supply" value={preview.displaySupply} />
+                            <PreviewStat label="Decimals" value={draft.decimals || "0"} />
+                            <PreviewStat label="Network" value="Solana Devnet" />
+                            <PreviewStat label="Est. cost" value={`~${preview.estimatedCostSol.toFixed(2)} SOL`} />
+                        </div>
+
+                        <div className="mt-6 rounded-2xl border border-border-subtle bg-background/70 p-4">
+                            <div className="text-xs uppercase tracking-wider text-muted-foreground">Description</div>
+                            <p className="mt-2 text-sm leading-6 text-foreground">
+                                {draft.tokenDescription.trim() || "Add a short description so wallets and explorers show context."}
+                            </p>
+                        </div>
+                    </section>
+
+                    {/* <section className="rounded-[28px] border border-border-subtle bg-surface/70 p-6 shadow-sm">
+                        <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+                            <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                            Trust layer
+                        </div>
+                        <div className="mt-4 space-y-3">
+                            {preview.warnings.map((warning) => (
+                                <div
+                                    key={warning}
+                                    className="flex gap-3 rounded-2xl border border-border-subtle bg-background/70 p-4 text-sm text-foreground"
+                                >
+                                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+                                    <span>{warning}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </section> */}
+
+                    {result ? (
+                        <section className="rounded-[28px] border border-primary/30 bg-primary/5 p-6 shadow-sm">
+                            <div className="text-xs uppercase tracking-wider text-primary">Launch complete</div>
+                            <h3 className="mt-2 text-lg font-medium text-foreground">Token created successfully</h3>
+                            <div className="mt-5 space-y-3 text-sm">
+                                <ResultRow label="Mint" value={truncateAddress(result.mintAddress, 6)} mono />
+                                <ResultRow label="Supply owner" value="You now hold 100% of minted supply" />
+                                <ResultRow label="Cost" value={`Estimated ~${result.estimatedCostSol.toFixed(2)} SOL`} />
+                                <ResultRow label="Metadata" value="Pinned to IPFS via Pinata" />
+                            </div>
+                            <div className="mt-5 flex flex-wrap gap-3">
+                                <a
+                                    href={`https://explorer.solana.com/address/${result.mintAddress}?cluster=devnet`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-glow focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                >
+                                    View mint <ExternalLink className="h-4 w-4" />
+                                </a>
+                                <a
+                                    href={`https://explorer.solana.com/tx/${result.signature}?cluster=devnet`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border-subtle bg-background/70 px-4 text-sm text-foreground transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                >
+                                    View transaction <ExternalLink className="h-4 w-4" />
+                                </a>
+                                <a
+                                    href={result.metadataUri}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-border-subtle bg-background/70 px-4 text-sm text-foreground transition-colors hover:bg-surface focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                >
+                                    View metadata <ExternalLink className="h-4 w-4" />
+                                </a>
+                            </div>
+                            <div className="mt-5 rounded-2xl border border-border-subtle bg-background/70 p-4 text-sm text-muted-foreground">
+                                Next steps: add liquidity, share the mint address, or wire this token into the
+                                command flow so users can send it with natural language.
+                            </div>
+                        </section>
+                    ) : null}
+                </aside>
+            </div>
+        </div>
     );
-  }
-
-  return <WalletView data={data} />;
 }
 
-function TxView({
-  summary,
-  contacts,
-  userId,
-  onContactSaved,
+function Field({
+    id,
+    label,
+    hint,
+    error,
+    required,
+    children,
 }: {
-  summary: TxSummary;
-  contacts: Contact[];
-  userId: string | null;
-  onContactSaved: (contact: Contact) => void;
+    id: string;
+    label: string;
+    hint?: string;
+    error?: string;
+    required?: boolean;
+    children: ReactNode;
 }) {
-  const [contactName, setContactName] = useState("");
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-
-  const matchedContact = summary.toAddress
-    ? contacts.find((contact) => contact.wallet === summary.toAddress)
-    : undefined;
-
-  const recipientLabel = matchedContact
-    ? `@${matchedContact.name} (${summary.toLabel})`
-    : summary.toLabel;
-
-  async function handleSaveRecipient() {
-    if (!userId || !summary.toAddress) {
-      return;
-    }
-
-    const name = contactName.trim();
-    if (!name) {
-      setSaveError("Enter a contact name.");
-      return;
-    }
-
-    setIsSaving(true);
-    setSaveError(null);
-
-    try {
-      const response = await createContact(userId, {
-        name,
-        wallet: summary.toAddress,
-      });
-
-      if (!response.contact) {
-        throw new Error("Could not save contact.");
-      }
-
-      onContactSaved(response.contact);
-      setContactName("");
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "Failed to save contact.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  const statusTone =
-    summary.status === "success"
-      ? "border-primary/40 bg-primary/10 text-primary"
-      : summary.status === "pending"
-        ? "border-warning/40 bg-warning/10 text-warning"
-        : "border-destructive/40 bg-destructive/10 text-destructive";
-
-  return (
-    <article className="rounded-2xl border border-border-subtle bg-surface/70 p-6 shadow-sm">
-      <div className="rounded-xl border border-border-subtle bg-gradient-to-br from-primary/15 via-background to-background p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <h2 className="text-lg font-medium text-foreground sm:text-xl">{summary.headline}</h2>
-          <div className={`rounded-full border px-3 py-1 text-xs font-medium ${statusTone}`}>
-            {humanStatus(summary.status)}
-          </div>
+    return (
+        <div className="space-y-2">
+            <label htmlFor={id} className="block text-sm font-medium text-foreground">
+                {label} {required ? <span className="text-primary">*</span> : null}
+            </label>
+            {children}
+            <div
+                id={`${id}-${error ? "error" : "hint"}`}
+                className={`text-xs ${error ? "text-destructive" : "text-muted-foreground"}`}
+            >
+                {error || hint}
+            </div>
         </div>
-        <p className="mt-2 text-sm text-muted-foreground">{summary.timeLabel}</p>
-      </div>
+    );
+}
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <DetailBlock label="Amount" value={summary.amountLabel} mono />
-        <DetailBlock label="Value" value={summary.valueInrLabel} mono tone="emerald" />
-        <DetailBlock label="Fee" value={summary.feeLabel} mono />
-        <DetailBlock label="Network" value={summary.network} />
-      </div>
-
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <DetailBlock label="From" value={summary.fromLabel} />
-        <DetailBlock label="To" value={recipientLabel} tone="blue" />
-      </div>
-
-      {summary.toAddress ? (
-        matchedContact ? (
-          <div className="mt-4 rounded-xl border border-primary/30 bg-primary/10 p-4 text-sm text-primary">
-            Contact recognized: @{matchedContact.name}
-            <div className="mt-1 font-mono text-xs text-muted-foreground">{summary.toAddress}</div>
-          </div>
-        ) : (
-          <div className="mt-4 rounded-xl border border-border-subtle bg-background/70 p-4">
-            <div className="text-sm text-foreground">Recipient not in your contacts.</div>
-            <div className="mt-1 font-mono text-xs text-muted-foreground">{summary.toAddress}</div>
-            {userId ? (
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <input
-                  value={contactName}
-                  onChange={(event) => setContactName(event.target.value)}
-                  placeholder="Save as name (e.g. pooja)"
-                  className="h-10 min-w-[220px] rounded-md border border-border bg-surface px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                />
-                <button
-                  type="button"
-                  onClick={() => void handleSaveRecipient()}
-                  disabled={isSaving}
-                  className="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary-glow disabled:cursor-not-allowed disabled:bg-muted-foreground/30 disabled:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                >
-                  {isSaving ? "Saving..." : "Save to contacts"}
-                </button>
-              </div>
-            ) : (
-              <div className="mt-2 text-xs text-muted-foreground">Connect wallet to save this address to contacts.</div>
-            )}
-            {saveError ? <div className="mt-2 text-xs text-destructive">{saveError}</div> : null}
-          </div>
-        )
-      ) : null}
-
-      {summary.flags.length > 0 ? (
-        <div className="mt-4 rounded-xl border border-warning/30 bg-warning/10 p-4">
-          <div className="text-xs uppercase tracking-wider text-warning">Smart Insights</div>
-          {summary.flags.map((flag) => (
-            <p key={flag} className="mt-2 text-sm text-warning">
-              ⚠ {flag}
-            </p>
-          ))}
+function PreviewStat({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="rounded-2xl border border-border-subtle bg-background/70 p-4">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
+            <div className="mt-2 font-mono text-base tabular-nums text-foreground">{value}</div>
         </div>
-      ) : null}
-
-      <div className="mt-4 flex items-center gap-2 rounded-xl border border-border-subtle bg-background/70 px-4 py-3 text-xs text-muted-foreground">
-        <span className="uppercase tracking-wider">Txn</span>
-        <a
-          href={explorerTxUrl(summary.signature, summary.cluster)}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-primary transition-colors hover:text-primary-glow focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        >
-          {short(summary.signature, 5)}
-          <ExternalLink className="h-3 w-3" />
-        </a>
-      </div>
-    </article>
-  );
+    );
 }
 
-function WalletView({ data }: { data: Extract<ExplorerResult, { kind: "wallet" }> }) {
-  return (
-    <article className="rounded-2xl border border-border-subtle bg-surface/70 p-6 shadow-sm">
-      <div className="rounded-xl border border-border-subtle bg-gradient-to-br from-blue-500/15 via-background to-background p-5">
-        <h2 className="text-lg font-medium text-foreground">Wallet Overview</h2>
-        <p className="mt-2 font-mono text-2xl text-foreground">{formatNumber(data.balanceSol)} SOL</p>
-        <p className="mt-1 text-sm text-emerald-400">{formatInr(data.balanceSol * INR_RATES.SOL)}</p>
-      </div>
-
-      <div className="mt-6">
-        <h3 className="text-xs uppercase tracking-wider text-muted-foreground">Recent Activity</h3>
-        <ul className="mt-3 grid gap-3 sm:grid-cols-2">
-          {data.recent.length === 0 ? (
-            <li className="text-sm text-muted-foreground">No recent transactions found.</li>
-          ) : (
-            data.recent.map((item) => (
-              <li key={item.signature} className="rounded-xl border border-border-subtle bg-background/70 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm text-foreground">{item.label}</p>
-                  <span className="rounded-full border border-border-subtle bg-surface px-2 py-0.5 text-xs text-muted-foreground">
-                    {item.timeLabel}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <span
-                    className={
-                      item.status === "success"
-                        ? "text-primary"
-                        : item.status === "pending"
-                          ? "text-warning"
-                          : "text-destructive"
-                    }
-                  >
-                    {humanStatus(item.status)}
-                  </span>
-                  <span>•</span>
-                  <a
-                    href={explorerTxUrl(item.signature, data.network)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-primary transition-colors hover:text-primary-glow focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  >
-                    {short(item.signature, 5)} <ExternalLink className="h-3 w-3" />
-                  </a>
-                </div>
-              </li>
-            ))
-          )}
-        </ul>
-      </div>
-    </article>
-  );
+function ResultRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+    return (
+        <div className="flex items-baseline gap-4">
+            <span className="w-24 text-xs uppercase tracking-wider text-muted-foreground">{label}</span>
+            <span className={`${mono ? "font-mono" : ""} text-foreground`}>{value}</span>
+        </div>
+    );
 }
 
-function DetailBlock({
-  label,
-  value,
-  mono,
-  tone,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  tone?: "emerald" | "blue";
-}) {
-  const toneClass = tone === "emerald" ? "border-emerald-400/20 bg-emerald-400/10" : tone === "blue" ? "border-blue-400/20 bg-blue-400/10" : "border-border-subtle bg-background/60";
-
-  return (
-    <div className={`rounded-xl border p-4 ${toneClass}`}>
-      <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={`mt-2 text-sm text-foreground ${mono ? "font-mono" : ""}`}>{value}</div>
-    </div>
-  );
+function inputClassName(hasError?: string) {
+    return `min-h-11 w-full rounded-xl border bg-background/80 px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${hasError ? "border-destructive/60" : "border-border-subtle"
+        }`;
 }
 
-function detectType(input: string): QueryType {
-  if (input.length > 80) {
-    return "tx";
-  }
+function validateDraft(draft: LaunchDraft) {
+    const nextErrors: LaunchErrors = {};
 
-  return "wallet";
-}
-
-async function fetchExplorerData(
-  connection: Connection,
-  input: string,
-  network: ExplorerNetwork,
-): Promise<ExplorerResult> {
-  const type = detectType(input);
-
-  if (type === "tx") {
-    const tx = await connection.getParsedTransaction(input, {
-      maxSupportedTransactionVersion: 0,
-      commitment: "confirmed",
-    });
-
-    if (!tx) {
-      throw new Error(
-        `Transaction not found on ${network === "devnet" ? "devnet" : "mainnet"}.`,
-      );
+    if (!draft.tokenName.trim()) {
+        nextErrors.tokenName = "Enter a token name.";
+    } else if (draft.tokenName.trim().length > 32) {
+        nextErrors.tokenName = "Keep the name within 32 characters.";
     }
 
-    return {
-      kind: "tx",
-      summary: toTxSummary(tx, input, network),
-    };
-  }
+    if (!draft.tokenSymbol.trim()) {
+        nextErrors.tokenSymbol = "Enter a token symbol.";
+    } else if (!/^[A-Z0-9]+$/.test(draft.tokenSymbol.trim().toUpperCase())) {
+        nextErrors.tokenSymbol = "Use only letters and numbers in the symbol.";
+    } else if (draft.tokenSymbol.trim().length > 10) {
+        nextErrors.tokenSymbol = "Keep the symbol within 10 characters.";
+    }
 
-  const address = new PublicKey(input);
-  const [lamports, signatures] = await Promise.all([
-    connection.getBalance(address, "confirmed"),
-    connection.getSignaturesForAddress(address, { limit: 6 }, "confirmed"),
-  ]);
+    if (!/^[0-6]$/.test(draft.decimals)) {
+        nextErrors.decimals = "Choose decimals between 0 and 6.";
+    }
+
+    if (!draft.initialSupply.trim()) {
+        nextErrors.initialSupply = "Enter the supply to mint.";
+    } else if (!/^\d+$/.test(draft.initialSupply.trim())) {
+        nextErrors.initialSupply = "Supply must be a whole number.";
+    } else if (BigInt(draft.initialSupply.trim()) <= 0n) {
+        nextErrors.initialSupply = "Supply must be greater than zero.";
+    }
+
+    if (!draft.tokenDescription.trim()) {
+        nextErrors.tokenDescription = "Add a short token description.";
+    } else if (draft.tokenDescription.trim().length > 280) {
+        nextErrors.tokenDescription = "Keep the description within 280 characters.";
+    }
+
+    if (
+        draft.tokenLogoURL.trim() &&
+        !/^https?:\/\/.+\.(png|jpg|jpeg|webp|gif|svg)$/i.test(draft.tokenLogoURL.trim())
+    ) {
+        nextErrors.tokenLogoURL = "Use a direct image URL ending with a supported file extension.";
+    }
+
+    return nextErrors;
+}
+
+function buildPreview(draft: LaunchDraft) {
+    const normalizedSymbol = draft.tokenSymbol.trim().toUpperCase();
+    const warnings = [
+        "This token has no liquidity yet, so buyers cannot discover a market price immediately.",
+        "Anyone can mint a similar name or ticker. Treat branding as unverified until you build trust.",
+        "You will own 100% of the initial supply after launch unless you distribute it later.",
+    ];
+
+    if (normalizedSymbol.length > 0 && normalizedSymbol.length < 3) {
+        warnings.unshift("Very short symbols are easy to confuse with other tokens.");
+    }
+
+    if (!draft.tokenLogoURL.trim()) {
+        warnings.push("No logo link provided. Wallets may show a generic placeholder until metadata is refreshed.");
+    }
+
+    if (draft.decimals === "0") {
+        warnings.push("Zero decimals make the token indivisible, which is usually better for collectibles than currency.");
+    }
 
   return {
-    kind: "wallet",
-    address: address.toBase58(),
-    balanceSol: lamports / LAMPORTS_PER_SOL,
-    network,
-    recent: signatures.map((s) => ({
-      signature: s.signature,
-      label: s.err ? "Transaction failed" : "Transaction confirmed",
-      timeLabel: s.blockTime ? timeAgo(s.blockTime * 1000) : "unknown time",
-      status: s.err ? "failed" : s.confirmationStatus === "processed" ? "pending" : "success",
-    })),
+    warnings,
+    estimatedCostSol: 0.01,
+    displaySupply: draft.initialSupply
+      ? BigInt(draft.initialSupply).toLocaleString("en-US")
+      : "0",
   };
 }
 
-function toTxSummary(
-  tx: Awaited<ReturnType<Connection["getParsedTransaction"]>>,
-  signature: string,
-  network: ExplorerNetwork,
-): TxSummary {
-  if (!tx) {
-    throw new Error("Missing transaction data.");
+function base64ToUint8Array(value: string) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
   }
 
-  const transfer = extractTransfer(tx);
-  const feeSol = (tx.meta?.fee ?? 0) / LAMPORTS_PER_SOL;
-  const status: TxSummary["status"] = tx.meta?.err ? "failed" : "success";
-
-  if (!transfer) {
-    return {
-      status,
-      headline: "Parsed transaction found (non-transfer program)",
-      amountLabel: "Unknown",
-      valueInrLabel: "Unknown",
-      fromLabel: short(signature, 4),
-      toLabel: "Unknown",
-      toAddress: undefined,
-      feeLabel: `${feeSol.toFixed(6)} SOL`,
-      timeLabel: tx.blockTime ? timeAgo(tx.blockTime * 1000) : "unknown time",
-      network: `Solana ${network === "devnet" ? "Devnet" : "Mainnet"}`,
-      cluster: network,
-      signature,
-      flags: ["Could not map this transaction to a simple transfer summary"],
-    };
-  }
-
-  const amountInr = transfer.amount * INR_RATES.SOL;
-  const flags: string[] = [];
-
-  if (transfer.amount * INR_RATES.SOL > 5000) {
-    flags.push("Large transaction (>₹5,000)");
-  }
-  flags.push("First time interacting (heuristic)");
-
-  return {
-    status,
-    headline: `Sent ${formatNumber(transfer.amount)} SOL to ${short(transfer.to, 4)}`,
-    amountLabel: `${formatNumber(transfer.amount)} SOL`,
-    valueInrLabel: formatInr(amountInr),
-    fromLabel: short(transfer.from, 4),
-    toLabel: short(transfer.to, 4),
-    toAddress: transfer.to,
-    feeLabel: `${feeSol.toFixed(6)} SOL`,
-    timeLabel: tx.blockTime ? timeAgo(tx.blockTime * 1000) : "unknown time",
-    network: `Solana ${network === "devnet" ? "Devnet" : "Mainnet"}`,
-    cluster: network,
-    signature,
-    flags,
-  };
-}
-
-function extractTransfer(
-  tx: Awaited<ReturnType<Connection["getParsedTransaction"]>>,
-): { from: string; to: string; amount: number } | null {
-  if (!tx) {
-    return null;
-  }
-
-  const instruction = tx.transaction.message.instructions.find(
-    (ix) => "program" in ix && ix.program === "system" && "parsed" in ix,
-  );
-
-  if (!instruction || !("parsed" in instruction)) {
-    return null;
-  }
-
-  const parsed = instruction.parsed;
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
-
-  const info = "info" in parsed ? (parsed as { info?: Record<string, unknown> }).info : undefined;
-  const source = info?.source;
-  const destination = info?.destination;
-  const lamports = info?.lamports;
-
-  if (typeof source !== "string" || typeof destination !== "string" || typeof lamports !== "number") {
-    return null;
-  }
-
-  return {
-    from: source,
-    to: destination,
-    amount: lamports / LAMPORTS_PER_SOL,
-  };
-}
-
-function short(value: string, chars = 4) {
-  if (value.length <= chars * 2 + 3) {
-    return value;
-  }
-  return `${value.slice(0, chars)}...${value.slice(-chars)}`;
-}
-
-function humanStatus(status: "success" | "pending" | "failed") {
-  if (status === "success") {
-    return "Confirmed";
-  }
-  if (status === "pending") {
-    return "Pending";
-  }
-  return "Failed";
-}
-
-function formatInr(value: number) {
-  return `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-}
-
-function formatNumber(value: number) {
-  return value.toLocaleString("en-IN", {
-    minimumFractionDigits: value < 10 ? 2 : 0,
-    maximumFractionDigits: 4,
-  });
-}
-
-function timeAgo(timestampMs: number) {
-  const diffMs = Date.now() - timestampMs;
-  const minutes = Math.floor(diffMs / (60 * 1000));
-
-  if (minutes < 1) {
-    return "just now";
-  }
-  if (minutes < 60) {
-    return `${minutes} min ago`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `${hours} hr ago`;
-  }
-
-  const days = Math.floor(hours / 24);
-  return `${days} day ago`;
-}
-
-function explorerTxUrl(signature: string, network: ExplorerNetwork) {
-  if (network === "mainnet-beta") {
-    return `https://explorer.solana.com/tx/${signature}`;
-  }
-
-  return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+  return bytes;
 }

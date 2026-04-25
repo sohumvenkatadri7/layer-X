@@ -6,16 +6,38 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Load env from project root even when command is started from ./server.
-dotenv.config({ path: resolve(__dirname, "../.env.local") });
+// `.env.local` takes precedence over `.env` when both are present.
+dotenv.config({ path: resolve(__dirname, "../.env") });
+dotenv.config({ path: resolve(__dirname, "../.env.local"), override: true });
 
 import http from "node:http";
 import { DeepgramClient } from "@deepgram/sdk";
 import { MongoServerError, ObjectId } from "mongodb";
-import { PublicKey } from "@solana/web3.js";
+import {
+  clusterApiUrl,
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountInstruction,
+  createInitializeMintInstruction,
+  createMintToInstruction,
+  getAssociatedTokenAddressSync,
+  MINT_SIZE,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import { createCreateMetadataAccountV3Instruction } from "@metaplex-foundation/mpl-token-metadata";
 import { ensureIndexes, getCollections, isMongoConfigured } from "./mongo";
 import type { ApiContact, ApiError, ContactDoc } from "./types";
 
 const port = Number(process.env.PORT ?? 8787);
+const MPL_TOKEN_METADATA_PROGRAM_ID = new PublicKey(
+  "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s",
+);
 
 function jsonHeaders() {
   return {
@@ -66,6 +88,72 @@ function displayContactName(name: string) {
   return name.trim().replace(/^@+/, "").replace(/\s+/g, " ");
 }
 
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isDirectImageUrl(value: string) {
+  if (!isValidHttpUrl(value)) {
+    return false;
+  }
+
+  return /\.(png|jpg|jpeg|webp|gif|svg)$/i.test(value);
+}
+
+async function uploadTokenMetadata({
+  tokenName,
+  tokenSymbol,
+  tokenDescription,
+  tokenLogoURL,
+}: {
+  tokenName: string;
+  tokenSymbol: string;
+  tokenDescription: string;
+  tokenLogoURL: string;
+}) {
+  if (!process.env.PINATA_JWT) {
+    throw new Error("PINATA_JWT is not configured on the server.");
+  }
+
+  const metadataJSON = {
+    name: tokenName,
+    symbol: tokenSymbol,
+    description: tokenDescription,
+    image: tokenLogoURL,
+    attributes: [],
+    properties: {
+      category: "image",
+      files: tokenLogoURL ? [{ type: "image", uri: tokenLogoURL }] : [],
+    },
+  };
+
+  const pinataRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.PINATA_JWT}`,
+    },
+    body: JSON.stringify(metadataJSON),
+  });
+
+  if (!pinataRes.ok) {
+    const errText = await pinataRes.text().catch(() => "");
+    throw new Error(errText || "Pinata upload failed.");
+  }
+
+  const pinataData = (await pinataRes.json()) as { IpfsHash?: string };
+  if (!pinataData.IpfsHash) {
+    throw new Error("Pinata did not return an IPFS hash.");
+  }
+
+  return `https://gateway.pinata.cloud/ipfs/${pinataData.IpfsHash}`;
+}
+
 function toApiContact(doc: ContactDoc): ApiContact {
   return {
     id: doc._id.toHexString(),
@@ -108,8 +196,7 @@ async function main() {
   try {
     await ensureIndexes();
   } catch (error) {
-    console.error("[startup] failed to initialize MongoDB", error);
-    process.exit(1);
+    console.error("[startup] MongoDB initialization failed; continuing without contacts support", error);
   }
 
   const server = http.createServer(async (req, res) => {
@@ -129,6 +216,176 @@ async function main() {
 
       if (url.pathname === "/health") {
         return sendJson(res, 200, { ok: true, mongoConfigured: isMongoConfigured() });
+      }
+
+      if (url.pathname === "/launch-token" && req.method === "POST") {
+        const body = (await readJsonBody(req)) as {
+          account?: string;
+          tokenName?: string;
+          tokenSymbol?: string;
+          decimals?: number;
+          initialSupply?: string;
+          tokenDescription?: string;
+          tokenLogoURL?: string;
+        } | null;
+
+        const account = body?.account?.trim() ?? "";
+        const tokenName = body?.tokenName?.trim() ?? "";
+        const tokenSymbol = body?.tokenSymbol?.trim().toUpperCase() ?? "";
+        const decimals = Number(body?.decimals ?? 0);
+        const initialSupplyRaw = body?.initialSupply?.trim() ?? "";
+        const tokenDescription = body?.tokenDescription?.trim() ?? "";
+        const tokenLogoURL = body?.tokenLogoURL?.trim() ?? "";
+
+        if (!isValidSolanaAddress(account)) {
+          return sendError(res, 400, "Connect a valid wallet before launching.");
+        }
+
+        if (!tokenName || tokenName.length > 32) {
+          return sendError(res, 400, "Token name is required and must be 32 characters or fewer.");
+        }
+
+        if (!tokenSymbol || tokenSymbol.length > 10) {
+          return sendError(res, 400, "Token symbol is required and must be 10 characters or fewer.");
+        }
+
+        if (!Number.isInteger(decimals) || decimals < 0 || decimals > 6) {
+          return sendError(res, 400, "Decimals must be a whole number between 0 and 6.");
+        }
+
+        if (!/^\d+$/.test(initialSupplyRaw) || BigInt(initialSupplyRaw) <= 0n) {
+          return sendError(res, 400, "Initial supply must be a positive whole number.");
+        }
+
+        if (!tokenDescription || tokenDescription.length > 280) {
+          return sendError(
+            res,
+            400,
+            "Token description is required and must be 280 characters or fewer.",
+          );
+        }
+
+        if (tokenLogoURL && !isDirectImageUrl(tokenLogoURL)) {
+          return sendError(
+            res,
+            400,
+            "Logo URL must be a direct http(s) image link ending in png, jpg, jpeg, webp, gif, or svg.",
+          );
+        }
+
+        const connection = new Connection(process.env.SOLANA_RPC || clusterApiUrl("devnet"));
+        const userPubkey = new PublicKey(account);
+        const mintKeypair = Keypair.generate();
+        const userTokenAccount = getAssociatedTokenAddressSync(
+          mintKeypair.publicKey,
+          userPubkey,
+          false,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID,
+        );
+        const actualSupply = BigInt(initialSupplyRaw) * 10n ** BigInt(decimals);
+        const lamports = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
+        const { blockhash } = await connection.getLatestBlockhash("confirmed");
+        const metadataUri = await uploadTokenMetadata({
+          tokenName,
+          tokenSymbol,
+          tokenDescription,
+          tokenLogoURL,
+        });
+
+        const transaction = new Transaction({
+          feePayer: userPubkey,
+          recentBlockhash: blockhash,
+        });
+
+        transaction.add(
+          SystemProgram.createAccount({
+            fromPubkey: userPubkey,
+            newAccountPubkey: mintKeypair.publicKey,
+            space: MINT_SIZE,
+            lamports,
+            programId: TOKEN_PROGRAM_ID,
+          }),
+          createInitializeMintInstruction(
+            mintKeypair.publicKey,
+            decimals,
+            userPubkey,
+            userPubkey,
+            TOKEN_PROGRAM_ID,
+          ),
+          createAssociatedTokenAccountInstruction(
+            userPubkey,
+            userTokenAccount,
+            userPubkey,
+            mintKeypair.publicKey,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID,
+          ),
+          createMintToInstruction(
+            mintKeypair.publicKey,
+            userTokenAccount,
+            userPubkey,
+            actualSupply,
+            [],
+            TOKEN_PROGRAM_ID,
+          ),
+        );
+
+        const [metadataPDA] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from("metadata"),
+            MPL_TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+            mintKeypair.publicKey.toBuffer(),
+          ],
+          MPL_TOKEN_METADATA_PROGRAM_ID,
+        );
+
+        transaction.add(
+          createCreateMetadataAccountV3Instruction(
+            {
+              metadata: metadataPDA,
+              mint: mintKeypair.publicKey,
+              mintAuthority: userPubkey,
+              payer: userPubkey,
+              updateAuthority: userPubkey,
+            },
+            {
+              createMetadataAccountArgsV3: {
+                data: {
+                  name: tokenName,
+                  symbol: tokenSymbol,
+                  uri: metadataUri,
+                  sellerFeeBasisPoints: 0,
+                  creators: [
+                    {
+                      address: userPubkey,
+                      verified: false,
+                      share: 100,
+                    },
+                  ],
+                  collection: null,
+                  uses: null,
+                },
+                isMutable: true,
+                collectionDetails: null,
+              },
+            },
+          ),
+        );
+
+        transaction.partialSign(mintKeypair);
+
+        return sendJson(res, 200, {
+          serializedTransaction: transaction
+            .serialize({
+              requireAllSignatures: false,
+              verifySignatures: false,
+            })
+            .toString("base64"),
+          mintAddress: mintKeypair.publicKey.toBase58(),
+          metadataUri,
+          estimatedCostSol: 0.01,
+        });
       }
 
       if (!isMongoConfigured()) {
